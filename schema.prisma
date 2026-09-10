@@ -1,0 +1,77 @@
+// CompScope — Compensation Intelligence Platform
+// Prisma schema (PostgreSQL)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// A normalized company. Many raw name variants ("Google India", "Google LLC")
+// resolve to a single Company row via CompanyAlias, so aggregation queries
+// (average comp, level breakdown, locations) are always correct regardless
+// of how the source data spelled the name.
+model Company {
+  id            String          @id @default(cuid())
+  name          String          @unique
+  slug          String          @unique
+  aliases       CompanyAlias[]
+  salaryRecords SalaryRecord[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([slug])
+}
+
+model CompanyAlias {
+  id        String  @id @default(cuid())
+  alias     String  @unique
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  companyId String
+
+  @@index([companyId])
+}
+
+// A single compensation data point. Levels matter more than titles, so
+// `level` is a first-class filterable/sortable field, not buried in a title string.
+model SalaryRecord {
+  id          String   @id @default(cuid())
+  company     Company  @relation(fields: [companyId], references: [id])
+  companyId   String
+
+  role        String // e.g. "Software Engineer", "Data Scientist"
+  level       String // e.g. "L4", "SDE2", "62" — free text but indexed for filtering
+  location    String
+
+  // Stored in the smallest currency unit-agnostic form: whole rupees (or whichever
+  // currency `currency` specifies). Never trust a client-submitted total —
+  // it is always recomputed server-side in lib/compensation.ts.
+  baseSalary  Int
+  bonus       Int      @default(0)
+  stock       Int      @default(0)
+  totalComp   Int
+  currency    String   @default("INR")
+
+  experienceYears Float?
+
+  // Where this data point came from — used together with company+role+level+location
+  // to detect duplicates.
+  source      String   @default("manual")
+
+  // Soft validation flag: false for rows that failed validation but were kept
+  // for audit purposes instead of silently dropped (see lib/validation.ts).
+  isValid     Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([role])
+  @@index([level])
+  @@index([location])
+  @@index([totalComp])
+  @@unique([companyId, role, level, location, source], name: "duplicate_key")
+}
